@@ -1,0 +1,464 @@
+---
+title: "GutenbergReads"
+author: "Brian O'Grady"
+date: "May 10, 2019"
+header-includes:
+    - \usepackage{setspace}\doublespacing
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(gutenbergr)
+library(tidyverse)
+library(tidytext)
+library(stringr)
+library(magrittr)
+library(ggplot2)
+library(knitr)
+
+# Project Gutenberg is not happy about web-scraping of their pages;
+# therefore for this project instead of creating an application that
+# actively updates the top N books from Gutenberg,
+# I will manually pick the top 20 and use those.
+# Reference: http://www.gutenberg.org/wiki/Gutenberg:Information_About_Robot_Access_to_our_Pages
+
+# Books I selected:
+# 1) Pride & Prejudice by Jane Austen (1162)
+# 2) Frankenstein by Mary Shelley (848)
+# 3) Et dukkehjem (A Doll's House) by Henrik Ibsen (683)
+# 4) The Importance of Being Earnest by Oscar Wilde (653)
+# 5) A Tale of Two Cities by Charles Dickens (621)
+# 6) The Strange Case of Dr. Jekyll and Mr. Hyde by Robert Louis Stevenson (471)
+# 7) Alice's Adventures in Wonderland by Lewis Carroll (462)
+# 8) Dracula by Bram Stoker (442)
+# 9) The Adventures of Sherlock Holmes by Arthur Conan Doyle (425)
+# 10) The Awakening and Selected Shorts Stories by Kate Chopin (385)
+
+# IDs c(1342, 84, 2542, 844, 98, 43, 11, 345, 1661, 160)
+
+get_text <- function(id, re, ignore_case=TRUE) {
+  
+  df <- gutenberg_download(
+    gutenberg_id = id,
+    meta_fields = "title"
+  ) %>%
+    group_by(gutenberg_id) %>%
+    mutate(
+      linenumber = row_number(),
+      chapter = cumsum(str_detect(text, regex(re, ignore_case = ignore_case)))
+    ) %>%
+    ungroup() %>%
+    filter(!str_detect(text, regex(re, ignore_case = ignore_case))) %>%
+    unnest_tokens(word, text) %>%
+    filter(chapter != 0)
+  
+  return(df)
+}
+
+# 1) Pride and Prejudice: 1342
+pride_and_prejudice <- get_text(1342, "^chapter [\\divxlc]", TRUE)
+head(pride_and_prejudice)
+
+# 2) Frankenstein: 84
+frankenstein <- get_text(84, "^(letter|chapter) [\\divxlc]", TRUE)
+head(frankenstein)
+
+# 3) A Doll's House: 2542  
+dolls_house <- get_text(2542, "^act [\\divxlc]", TRUE)
+head(dolls_house)
+
+# 4) The Importance of Being Earnest: 844
+being_earnest <- get_text(844, "^(FIRST|SECOND|THIRD) ACT", FALSE)
+head(being_earnest)
+
+# 5) A Tale of Two Cities: 98
+two_cities <- get_text(98, "^[\\divxlc]\\.")
+head(two_cities)
+
+# 6) The Strange Case of Dr. Jekyll and Mr. Hyde: 43
+
+gutenberg_download(
+  gutenberg_id = 43,
+  meta_fields = "title"
+) %>%
+  group_by(gutenberg_id) %>%
+  mutate(
+    linenumber = row_number(),
+    chapter = cumsum(str_detect(text, regex("^[A-Z]$", ignore_case = FALSE)))) %>%
+  ungroup() %>%
+  filter(!str_detect(text, regex("^[A-Z]$", ignore_case = FALSE))) %>%
+  unnest_tokens(word, text) %>%
+  filter(chapter != 0)
+hyde <- get_text(43, "^[A-Z]*$")
+head(hyde)
+
+# 7) Alice's Adventures in Wonderland: 11
+wonderland <- get_text(11, "^chapter [\\divxlc]", TRUE)
+head(wonderland)
+
+# 8) Dracula: 345
+dracula <- get_text(345, "^chapter [\\divxlc]")
+head(dracula)
+
+# 9) The Adventures of Sherlock Holmes: 
+holmes <- get_text(1661, "^[\\divxlc]\\.")
+head(holmes)
+
+# 10) The Awakening and Selected Shorts Stories: 160
+awakening <- get_text(160, "^[\\divxlc]$")
+head(awakening)
+
+book_list <- list(
+  pride_and_prejudice,
+  frankenstein,
+  dolls_house,
+  being_earnest,
+  two_cities,
+  hyde,
+  wonderland,
+  dracula,
+  holmes,
+  awakening
+)
+
+all_books <- do.call(rbind, book_list)
+
+# Dracula
+data(stop_words)
+
+dracula %>% 
+  anti_join(stop_words) %>%
+  group_by(gutenberg_id) %>%
+  count(word, sort = TRUE) %>%
+  top_n(10)
+
+# Sentiments
+
+book_line_sentiment <- function(book_dataframe) {
+  book_dataframe %>%
+    inner_join(get_sentiments("bing")) %>%
+    count(title, index = linenumber %/% 80, sentiment) %>%
+    spread(sentiment, n, fill = 0) %>%
+    mutate(sentiment = positive - negative)
+}
+
+dracula %>% inner_join(get_sentiments("bing"))
+
+book_section_sentiment <- function(book_dataframe) {
+  book_dataframe %>%
+    inner_join(get_sentiments("bing")) %>%
+    count(title, index = chapter %/% 80, sentiment) %>%
+    spread(sentiment, n, fill = 0) %>%
+    mutate(sentiment = positive - negative)
+}
+
+book_sentiment <- function(book_dataframe, book) {
+  sent <- book_dataframe %>%
+    inner_join(get_sentiments("bing")) %>%
+    count(title, index = chapter %/% 80, sentiment) %>%
+    spread(sentiment, n, fill = 0) %>%
+    mutate(sentiment = positive - negative)
+  sent <- sum(sent$sentiment)
+  data.frame(sentiment=c(sent), book=book)
+}
+
+plot_sentiment <- function(sentiment_df) {
+  ggplot(sentiment_df, aes(index, sentiment, fill = title)) +
+    geom_bar(alpha = 0.8, stat = "identity", show.legend = FALSE) +
+    ggtitle(sentiment_df$title %>% unique())
+}
+
+p <- plot_sentiment(book_line_sentiment(dracula))
+
+
+
+p + ggtitle("Dracula Sentiment")
+
+book_sentiment(dracula, "Dracula")
+
+
+######## Goodreads API Portion
+# need to use Sys.sleep(5) here after every API call
+library(httr)
+library(htmltools)
+library(jsonlite)
+library(rgoodreads)
+library(XML)
+
+Sys.setenv(GOODREADS_KEY = "Udi7ksn8kPsmb7P87J28LQ")
+
+get_content <- function(path, ...) {
+  site <- "goodreads"
+  page <- 1
+  base_path <- "https://www.goodreads.com/"
+  query <- list(site = site, page = page, ...)
+  goodreads_key <- Sys.getenv("GOODREADS_KEY")
+  if (goodreads_key != "") {
+    query$key <- goodreads_key
+  }
+  req <- httr::GET(base_path, path = path, query = query)
+  req
+}
+get_review_body <- function(r) {
+  
+  review <- XML::xmlToDataFrame(
+    nodes = XML::getNodeSet(
+      XML::xmlParse(
+        httr::content(r, as = "text")
+        ),
+      "//review")
+    )
+  
+  body <- as.character(review$body)
+  no_tags <- tolower(gsub("<.*?>", "", body))
+  no_nums <- gsub("[^A-Za-z]", " ", no_tags)
+  splitted <- str_split(no_nums, "\\s+")
+  r <- data.frame(splitted)
+  colnames(r) <- c("word")
+  r$rating <- review$rating[1]
+  r
+}
+review_pipeline <- function(review_id, bookname) {
+  r <- get_content("review/show", id = review_id)
+  r <- get_review_body(r)
+  Sys.sleep(5)
+  r$review_id <- review_id
+  r$book <- bookname
+  r
+}
+
+binder <- function(review_list, bookname) {
+  reviews <- lapply(review_list, review_pipeline, bookname = bookname)
+  df <- do.call(rbind, reviews)
+  df
+}
+
+# Get content for pride and prejudice
+p_and_p_review_ids <- list(94411694, 187911, 38957496, 4422467, 325768505)
+p_and_p_reviews_df <- binder(p_and_p_review_ids, "Pride and Prejudice")
+p_and_p_sent <- book_sentiment(pride_and_prejudice, "Pride and Prejudice")
+
+# 2) Frankenstein
+frank_review_ids <- list(46535372, 133726855, 878856994, 1182910, 659664492)
+frank_reviews_df <- binder(frank_review_ids, "Frankenstein")
+frank_sent <- book_sentiment(frankenstein, "Frankenstein")
+
+# 3) A Doll's House: 2542  
+dolls_review_ids <- list(977174454, 1212372213, 2514883, 1600452614, 37793)
+dolls_reviews_df <- binder(dolls_review_ids, "A Doll's House")
+dolls_sent <- book_sentiment(dolls_house, "A Doll's House")
+
+# 4) The Importance of Being Earnest: 844
+earnest_ids <- list(52338865, 394253635, 1950519000, 2255702632, 592555688)
+earnest_reviews_df <- binder(earnest_ids, "The Importance of Being Ernest")
+earnest_sent <- book_sentiment(being_earnest, "The Importance of Being Ernest")
+
+# 5) A Tale of Two Cities: 98
+two_cities_ids <- list(13354511, 242042032, 826615739, 2624743373, 100084585)
+two_cities_reviews_df <- binder(two_cities_ids, "A Tale of Two Cities")
+two_cities_sent <- book_sentiment(two_cities, "A Tale of Two Cities")
+
+# 6) The Strange Case of Dr. Jekyll and Mr. Hyde: 43
+hyde_ids <- list(1091392756, 56401535, 2524985413, 1090749013, 1212217859)
+hyde_reviews_df <- binder(hyde_ids, "The Strange Case of Dr. Jekyll and Mr. Hyde")
+hyde_sent <- book_sentiment(hyde, "The Strange Case of Dr. Jekyll and Mr. Hyde")
+
+# 7) Alice's Adventures in Wonderland: 11
+wonderland_ids <- list(1477639, 2369739786, 2178839478, 977173235, 56217794)
+wonderland_reviews_df <- binder(wonderland_ids, "Alice's Adventures in Wonderland")
+wonder_sent <- book_sentiment(wonderland, "Alice's Adventures in Wonderland")
+
+# 8) Dracula: 345
+dracula_review_ids <- list(1207277774, 1284817339, 208650737, 1257057060, 2506047139)
+dracula_reviews_df <- binder(dracula_review_ids, "Dracula")
+drac_sent <- book_sentiment(dracula, "Dracula")
+
+# 9) The Adventures of Sherlock Holmes
+sherlock_ids <- list(545554512, 39669458, 1361770632, 1053099138, 203450133)
+sherlock_reviews_df <- binder(sherlock_ids, "The Adventure's of Sherlock Holmes")
+sherlock_sent <- book_sentiment(holmes, "The Adventure's of Sherlock Holmes")
+
+# 10) The Awakening and Selected Shorts Stories: 160
+awakening_ids <- list(2534720834, 1899628214, 1028032971, 43254608, 85917220)
+awakening_reviews_df <- binder(awakening_ids, "The Awakening and Selected Short Stories")
+awakening_sent <- book_sentiment(awakening, "The Awakening and Selected Short Stories")
+
+sentiments_of_books <- do.call(
+  rbind,
+  list(p_and_p_sent, frank_sent, dolls_sent, earnest_sent, two_cities_sent, hyde_sent,
+       wonder_sent, drac_sent, sherlock_sent, awakening_sent)
+)
+
+get_review_sentiment <- function(review_df) {
+  
+  review_df %>%
+    inner_join(get_sentiments("bing")) %>%
+    mutate(sentiment = ifelse(sentiment == "positive", 1, -1)) %>%
+    group_by(book, review_id, rating) %>%
+    summarise(sentiment = sum(sentiment))
+  
+}
+
+all_reviews <- do.call(
+  rbind,
+  list(p_and_p_reviews_df, frank_reviews_df, dolls_reviews_df, earnest_reviews_df,
+       two_cities_reviews_df, hyde_reviews_df, wonderland_reviews_df, dracula_reviews_df,
+       sherlock_reviews_df, awakening_reviews_df)
+)
+
+reviews_sentiments <- get_review_sentiment(all_reviews)
+```
+
+
+# Introduction
+
+The goal of this project is to examine the relationship between books and their online reviews, using Gutenberg.org as the source for online texts and Goodreads.com as the source for their reviews. The initial objective was to see if I could arrive at some sort of statistical/machine learning analysis in this relationship, but we will see throughout this paper why this was not possible. Instead I chose to focus on providing context for the data and understanding the limitations of the methods we learned in this class. Review data is complex enough as it is; however, it seems book reviews are a separate breed from those we read on Amazon, Yelp, etc.. We will see some examples of reviews later on.
+ 
+I was able to successfully pull in the data from the Goodreads.com API and gain some good experience there, as my background is not in working with web data or development. Getting this code right proved to be the biggest challenge of all, as we had already worked with Gutenberg.org books earlier in the class. I did consider involving some more sophisticated natural language processing techniques such as lemmatization but abandoned these endeavours due to the timeline and decided instead to focus on what has been the overarching purpose of the course: wrestling with APIs and pulling the data into R, wrangling and cleaning the data, and doing some data analysis on the output.
+
+# Data
+
+As stated above, I used Gutenberg.org and Goodreads.com as my data sources in this project. Let's take a closer look at the details of both.
+
+## Gutenberg.org
+
+Over 58,000 eBooks are available for free download on Gutenberg.org. The Gutenberg Project focuses on collecting "older works for which U.S. copyright has expired" to be made available for public use. On their website they have a Top 100 list which links to the top 100 most downloaded books from Gutenberg, and it is from here that I have made my selection for books. The books I chose are: Pride & Prejudice by Jane Austen; Frankenstein by Mary Shelley; Et dukkehjem (A Doll's House) by Henrik Ibsen; The Importance of Being Earnest by Oscar Wilde; A Tale of Two Cities by Charles Dickens; The Strange Case of Dr. Jekyll and Mr. Hyde by Robert Louis Stevenson; Alice's Adventures in Wonderland by Lewis Carroll; Dracula by Bram Stoker; The Adventures of Sherlock Holmes by Arthur Conan Doyle; and The Awakening and Selected Shorts Stories by Kate Chopin.
+
+## Goodreads.com
+
+The world's largest site for readers and book recommendations, Goodreads.com has a large following amongst the Internet-literate readers of the world. According to their website, you can:
+
+- See what books your friends are reading
+- Track the books you're reading, have read, and want to read
+- Check out your personalized book recommendations
+- Find out if a book is a good fit for you from [their] community's reviews
+
+Using their API I chose 5 reviews for each book (we will see why only five in the next section) from Gutenberg, totaling to 50 reviews.
+
+# API Limitations
+
+## Gutenberg.org
+
+The Gutenberg Project explicitly states that the site is explicitly intended for human users and that "[a]ny perceived use of automated tools to access this website will result in a temporary or permanent block of your IP address", according to their Terms of Use page. They say you can use a mirror site, but I decided to select a few books manually rather than trying to connect to the mirror given the other troubles I was having with the Goodreads.com API.
+
+## Goodreads.com
+
+There were several limitations for the Goodreads.com API. I was not allowed to make more than one request per second, and reviews were limited to 300 characters (which was the biggest disappointment). There is a method to select the top reviews from each book given an ISBN; however, sometimes the reviews were not in English so again I manually selected reviews from their website. The exact review ID's are given in my code. A further limitation is that I am not allowed to store any data obtained from their API. They state that we may "[n]ot use the API to harvest or index Goodreads data without our explicit written consent"; consequently, the "tidy" data included with this project will only include the Gutenberg data. Storing data from their website in a CSV and committing it to github would be a direct violation of their Terms of Use.
+
+# Exploratory Analysis
+
+I will be saving the analysis for the Goodreads.com data for the results section, since I would prefer not to perform any individual analysis and reveal any of Goodreads's data. Instead in this section I will show some R data analysis techniques for text we learned in class. I will focus solely on one book because representing all ten in one plot is a bit overwhelming. The book I have chosen to show data for is Dracula. For instance, below are the top ten most common non stop-words in Dracula by Bram Stoker.
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+data(stop_words)
+
+kable(
+  head(
+    dracula %>% 
+      anti_join(stop_words) %>%
+      group_by(gutenberg_id) %>%
+      count(word, sort = TRUE) %>%
+      top_n(10), 
+    10)
+)
+```
+
+
+As we can see many of these words are hardly surprising. There are four names in the top ten, which is hardly surprising. Other words don't give us much context, except for maybe "night" and "time" (since this is a horror novel). Let's see what happens when we get the bigrams.
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+kable(gutenberg_download(
+    gutenberg_id = 345,
+    meta_fields = "title"
+  ) %>%
+    group_by(gutenberg_id) %>%
+    mutate(
+      linenumber = row_number(),
+      chapter = cumsum(str_detect(text, regex("^chapter [\\divxlc]", ignore_case = TRUE)))
+    ) %>% 
+  ungroup() %>%
+  filter(!str_detect(text, regex("^chapter [\\divxlc]", ignore_case = TRUE))) %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2) %>%
+  mutate(bigram_number = row_number()) %>%
+  unnest_tokens(word, bigram, drop=FALSE) %>%
+  anti_join(stop_words) %>%
+  group_by(bigram_number) %>%
+  filter(n() == 2) %>%    # drop bigram instances where only one word left
+  summarise(bigram = unique(bigram)) %>%    # collapse groups to single bigram each
+  count(bigram) %>%
+  top_n(10))
+  
+```
+
+
+That actually gets a bit worse. 
+
+Below I plot the sentiment (by line) for Dracula. Clearly this book has negative sentiment since it is a horror book, although I would be pretty excited to read a horror novel in which the author uses overwhelmingly positive words to describe horrific situations.
+
+
+```{r, echo=FALSE, fig.align='center', warning=FALSE, message=FALSE}
+p <- plot_sentiment(book_line_sentiment(dracula))
+p + ggtitle("Dracula Sentiment")
+```
+
+
+# Results
+
+Below I show the review sentiment versus the rating the reviewer gave for that book.
+
+
+```{r, echo=FALSE, fig.align='center', warning=FALSE, message=FALSE}
+master_df <- reviews_sentiments %>%
+  inner_join(sentiments_of_books, by = "book") %>%
+  mutate(rating = as.numeric(rating)) %>%
+  rename(review_sentiment = sentiment.x, book_sentiment = sentiment.y)
+
+ggplot(master_df, aes(review_sentiment, rating, colour = book)) +
+  geom_point() +
+  geom_jitter() + theme(legend.position="none") +
+  ggtitle("Review Sentiment vs Rating")
+```
+
+
+First, let us note that we had no 4 star reviews in our sample. The sample is skewed anyway, since the highest upvoted reviews tend to be extreme and because people who support the extreme views tend to upvote. It is a noticeable phenomenon that most online reviews tend to be extreme.
+
+Otherwise, we don't really see any discernable pattern. It seems 5 star reviews tend to have lower sentiment, but negative reviews have slightly more positive sentiment. Perhaps the 5 star reviews tend to be more even-handed in their reviews, but I cannot explain why the sentiment should be more positive for the lower star reviews. Perhaps they were writing about how happy they were done to be reading.
+
+
+```{r, echo=FALSE, fig.align='center', warning=FALSE, message=FALSE}
+# show something here about how negative reviews tend to have extreme language
+# also talk about how people just write nonsense
+
+ggplot(master_df, aes(book_sentiment, rating, colour = book)) +
+  geom_point() +
+  geom_jitter() + theme(legend.position = "none") + 
+  ggtitle("Book Sentiment vs Rating")
+
+# The only books that are somewhat positive have lower ratings
+```
+
+
+Above is a plot of the book sentiment versus the review sentiment. Let's note that the more positive the book sentiment, the more negative the review tends to be. All the reviews in the light blue towards the right of the graph are for Pride and Prejudice. It seems people don't really like positive books on this website. Otherwise, an interesting phenomenon is that the books with more neutral sentiment tend to have a wider spread in rating. Had I more data and some knowledge of nonlinear modeling I would take a deeper look into this.
+
+
+```{r, echo=FALSE, fig.align='center', warning=FALSE, message=FALSE}
+ggplot(master_df, aes(book_sentiment, review_sentiment, colour = book)) +
+  geom_point()  + theme(legend.position = "none") + 
+  ggtitle("Book Sentiment vs Review Sentiment")
+
+# talke here about how there doesn't seem to be any strong relationship
+# the books with middling setiments tend to have a wider spread of review sentiment though
+```
+
+
+Above we view, in the book sentiment versus rating sentiment plot, the same pattern we noticed in the previous plot. Books with more extreme sentiments tend to have a smaller spread of review sentiment.
+
+
+# Conclusion
+
+Even if we had access to more than 300 characters of each review, truly understanding the sentiment would be tricky. We would probably not be any better off than we are now using the simple tools for text analysis at hand if we tried to do some sort of correlation at scale. This is where NLP would come into play, and had I more experience in that domain I would have tried to create something that would try to correlate a review's sentiment with a book's sentiment. However, this project was a good exercise for me in working with APIs and doing some text analytics, two spaces I definitely have been lagging in compared to the rest of the data science community. Plus, it was fun to read some people's reviews on Goodreads.
